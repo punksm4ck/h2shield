@@ -1,0 +1,34 @@
+name: Bug Report
+description: Something isn't working correctly
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect vs. what actually occurred?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, nginx/Apache version, GTK version
+      placeholder: |
+        OS: Kubuntu 24.04
+        Python: 3.12.3
+        nginx: 1.24.0
+        python3-gi: 3.46.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output or logs
+      render: text

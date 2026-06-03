@@ -1,0 +1,60 @@
+name: Lint
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax check (py_compile)
+        run: python3 -m py_compile h2shield_linux.py && echo "Syntax OK"
+
+      - name: AST parse check
+        run: |
+          python3 -c "
+          import ast, sys
+          with open('h2shield_linux.py') as f:
+              src = f.read()
+          ast.parse(src)
+          print('AST parse: OK')
+          "
+
+      - name: Import check (no GTK needed for core logic)
+        run: |
+          python3 -c "
+          import sys, types
+          # stub out gi so the import succeeds without a display
+          gi = types.ModuleType('gi')
+          gi.require_version = lambda *a: None
+          repo = types.ModuleType('gi.repository')
+          class _D:
+              def __init__(self,*a,**k): pass
+              def __getattr__(self,n): return _D()
+          for name in ('Gtk','GLib','Pango'):
+              setattr(repo, name, _D())
+          sys.modules['gi'] = gi
+          sys.modules['gi.repository'] = repo
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('h2s', 'h2shield_linux.py')
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          # smoke-test core functions
+          assert m.classify_scope('127.0.0.1') == 'Loopback'
+          assert m.classify_scope('0.0.0.0')   == 'All'
+          assert m.classify_scope('192.168.1.1') == 'LAN'
+          assert m._ver_ge('1.29.8', '1.29.8')
+          assert not m._ver_ge('1.26.3', '1.29.8')
+          print('Core logic smoke tests: OK')
+          "
+
+      - name: pyflakes (style, non-blocking)
+        run: |
+          pip install pyflakes --quiet
+          python3 -m pyflakes h2shield_linux.py || true

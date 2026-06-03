@@ -1,0 +1,22 @@
+name: Feature Request
+description: Suggest a defensive improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like added?
+      description: Describe the defensive use case. Out-of-scope requests (offensive tooling, fabricated metrics) will be closed.
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New server detection (Envoy / Pingora / Caddy / other)
+        - Hardening improvement
+        - Headless/CI mode
+        - Reporting
+        - Documentation
+        - Other (describe above)

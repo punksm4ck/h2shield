@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+
+# audit output — may contain hostnames, IPs, internal paths
+reports/
+logs/
+config_backups/
+
+# secrets
+*.key
+*.pem
+*.token
+*_secret*
+*_password*
+*credentials*
