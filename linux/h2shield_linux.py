@@ -1017,7 +1017,7 @@ class H2ShieldWindow(Gtk.Window):
 
     def _on_reports(self, _btn):
         REP_DIR.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(['xdg-open', str(REP_DIR)])
+        subprocess.Popen(['dolphin', str(REP_DIR)])
 
 
 # ===========================================================================
