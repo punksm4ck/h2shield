@@ -582,9 +582,11 @@ window {{ background-color: {DARK_BG}; color: {FG_MAIN}; }}
 .btn-dark  {{ background-color: {BTN_DARK}; color: {FG_MAIN}; border: 1px solid #30363d; }}
 .btn-dark label  {{ color: {FG_MAIN}; }}
 .btn-green {{ background-color: {GREEN};    color: #ffffff; border: none; }}
-.btn-green label {{ color: #ffffff; }}
+.btn-green label, .btn-green > label {{ color: #ffffff; }}
+button.btn-green {{ color: #ffffff; }}
 .btn-blue  {{ background-color: {BTN_BLUE}; color: #ffffff; border: none; }}
-.btn-blue label  {{ color: #ffffff; }}
+.btn-blue label, .btn-blue > label {{ color: #ffffff; }}
+button.btn-blue {{ color: #ffffff; }}
 .btn-red   {{ background-color: {RED_WARN}; color: #ffffff; border: none; }}
 .btn-red label   {{ color: #ffffff; }}
 progressbar trough   {{ background-color: {DARK_BG}; }}
