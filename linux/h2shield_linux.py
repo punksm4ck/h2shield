@@ -20,7 +20,7 @@ try:
 except Exception:
     HAS_GTK = False
 
-VERSION = '1.0.6'
+VERSION = '1.0.7'
 APP_DIR  = Path('/opt/h2shield')
 LOG_DIR  = APP_DIR / 'logs'
 REP_DIR  = APP_DIR / 'reports'
@@ -744,21 +744,14 @@ class H2ShieldWindow(Gtk.Window):
         GLib.timeout_add(100, self._tick)
 
     def _btn(self, label_text, css_class, handler):
-        # Construct label manually with Pango markup so KDE Breeze
-        # cannot override the foreground color via its theme engine.
-        color_map = {
-            'btn-green': ('#238636', '#ffffff'),
-            'btn-blue':  ('#1f6feb', '#ffffff'),
-            'btn-red':   ('#da3633', '#ffffff'),
-            'btn-dark':  ('#21262d', '#c9d1d9'),
-        }
-        bg, fg = color_map.get(css_class, ('#21262d', '#c9d1d9'))
-        lbl = Gtk.Label()
-        lbl.set_markup(f'<span foreground="{fg}">{label_text}</span>')
-        b = Gtk.Button()
-        b.add(lbl)
+        fg_map = {'btn-green':'#ffffff','btn-blue':'#ffffff','btn-red':'#ffffff','btn-dark':'#c9d1d9'}
+        fg = fg_map.get(css_class, '#c9d1d9')
+        b = Gtk.Button(label=label_text)
         b.get_style_context().add_class(css_class)
         b.connect('clicked', handler)
+        inner = b.get_child()
+        if inner and hasattr(inner, 'set_markup'):
+            inner.set_markup(f'<span foreground="{fg}">{label_text}</span>')
         return b
 
     def _mono_textview(self, css_class='mono'):
