@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement to H2Shield
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      description: H2Shield is a defensive, scope-honest tool.
+      options:
+        - label: This is a defensive feature (no offensive/exploit capability).
+          required: true
+        - label: This doesn't claim to defend against something it can't actually defend against.
+          required: true

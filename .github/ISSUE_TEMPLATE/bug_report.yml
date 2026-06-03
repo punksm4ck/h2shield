@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a problem with H2Shield
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: H2Shield version
+      description: Shown in the window title / script header (e.g. 1.2.0).
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: e.g. Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: pwsh
+    attributes:
+      label: PowerShell version
+      placeholder: output of `pwsh --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: iis
+    attributes:
+      label: IIS state on the affected box
+      options:
+        - No IIS installed
+        - IIS installed and running
+        - IIS installed but stopped
+        - IIS installed but disabled
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From C:\AEGIS_Source\H2Shield\logs\h2shield.log. REDACT any sensitive hostnames, IPs, or paths first.
+      render: text
