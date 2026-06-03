@@ -20,7 +20,7 @@ try:
 except Exception:
     HAS_GTK = False
 
-VERSION = '1.0.7'
+VERSION = '1.0.8'
 APP_DIR  = Path('/opt/h2shield')
 LOG_DIR  = APP_DIR / 'logs'
 REP_DIR  = APP_DIR / 'reports'
