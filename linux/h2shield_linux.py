@@ -20,7 +20,7 @@ try:
 except Exception:
     HAS_GTK = False
 
-VERSION = '1.0.4'
+VERSION = '1.0.6'
 APP_DIR  = Path('/opt/h2shield')
 LOG_DIR  = APP_DIR / 'logs'
 REP_DIR  = APP_DIR / 'reports'
@@ -604,6 +604,11 @@ def _load_css():
         if screen is not None:
             Gtk.StyleContext.add_provider_for_screen(
                 screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+            prov2 = Gtk.CssProvider()
+            prov2.load_from_data(b"button.btn-green label{color:#ffffff}button.btn-blue label{color:#ffffff}button.btn-red label{color:#ffffff}button.btn-dark label{color:#c9d1d9}")
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, prov2, Gtk.STYLE_PROVIDER_PRIORITY_USER
             )
     except Exception:
         pass
