@@ -742,14 +742,14 @@ class H2ShieldWindow(Gtk.Window):
         b.connect('clicked', handler)
         lbl = b.get_child()
         if lbl:
-            from gi.repository import Gdk
-            hex_map = {'btn-green': 'ffffff', 'btn-blue': 'ffffff',
-                       'btn-red': 'ffffff', 'btn-dark': 'c9d1d9'}
-            h = hex_map.get(css_class, 'c9d1d9')
-            rgba = Gdk.RGBA(
-                red=int(h[0:2],16)/255, green=int(h[2:4],16)/255,
-                blue=int(h[4:6],16)/255, alpha=1.0)
-            lbl.override_color(Gtk.StateFlags.NORMAL, rgba)
+            from gi.repository import Pango
+            hex_map = {'btn-green': '#ffffff', 'btn-blue': '#ffffff',
+                       'btn-red': '#ffffff', 'btn-dark': '#c9d1d9'}
+            color = hex_map.get(css_class, '#c9d1d9')
+            attrs = Pango.AttrList()
+            attrs.insert(Pango.attr_foreground_new(
+                *[int(color.lstrip('#')[i:i+2], 16) * 257 for i in (0, 2, 4)]))
+            lbl.set_attributes(attrs)
         return b
 
     def _mono_textview(self, css_class='mono'):
@@ -1014,6 +1014,7 @@ class H2ShieldWindow(Gtk.Window):
                 self._append_log(f'  {a}\n')
 
     def _on_reports(self, _btn):
+        REP_DIR.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(['xdg-open', str(REP_DIR)])
 
 
