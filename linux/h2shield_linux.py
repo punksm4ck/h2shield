@@ -4,43 +4,13 @@
  AEGIS H2-SHIELD (Linux)  —  HTTP/2 Bomb (CVE-2026-49975) Defense Tool
 ================================================================================
  PUNKS / OSIRIS-CORE  |  Kubuntu / Debian-family server-surface hardening GUI
-
- WHAT THIS ACTUALLY DOES (and what it deliberately does NOT do):
-   HTTP/2 Bomb is a SERVER-SIDE memory-exhaustion attack against processes that
-   listen for inbound HTTP/2 and decode HPACK (nginx / Apache / Envoy / Pingora).
-   It does NOT affect arbitrary GUI apps or non-HTTP/2 ports. This tool:
-     1. Inventories every LISTENING port + owning process via `ss`
-     2. Classifies each by reachability: All / LAN / LinkLocal / Loopback
-     3. Flags Risk=True only for reachable web-protocol listeners
-     4. Detects nginx / Apache HTTP/2 state and installed versions
-     5. HARDEN: backs up, diffs, and patches nginx/Apache configs to disable
-        HTTP/2 — default is AUDIT/DRY-RUN; you explicitly confirm before changes
-     6. Applies per-worker memory ceilings via cgroups (nginx) / ulimit (Apache)
-     7. Verifies: re-reads config and (if listening) probes live negotiation
-   Self-healing: installs a systemd timer or cron job that re-audits and
-   re-applies if drift is detected. Auto-update from a configurable URL.
-
- REQUIREMENTS:  python3 (>=3.8), python3-gi, gir1.2-gtk-3.0, ss (iproute2)
- INSTALL DEPS:  sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-pango-1.0
-
- USAGE:
-   # audit only (safe, read-only):
-   sudo python3 h2shield_linux.py
-
-   # headless (for cron/systemd):
-   sudo python3 h2shield_linux.py --headless [--harden]
-
-   # with auto-update:
-   sudo python3 h2shield_linux.py --update-url https://raw.example.com/h2shield_linux.py
+ v1.0.1  —  fixes: scope classifier (127.x, %iface stripping), button label CSS
 ================================================================================
 """
 
 import os, sys, subprocess, json, shutil, socket, re, argparse, threading, datetime
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Dependency check: give a clear install command if GTK is missing
-# ---------------------------------------------------------------------------
 try:
     import gi
     gi.require_version('Gtk', '3.0')
@@ -50,7 +20,7 @@ try:
 except Exception:
     HAS_GTK = False
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 APP_DIR  = Path('/opt/h2shield')
 LOG_DIR  = APP_DIR / 'logs'
 REP_DIR  = APP_DIR / 'reports'
@@ -61,11 +31,14 @@ BAK_DIR  = APP_DIR / 'config_backups'
 # ===========================================================================
 
 def classify_scope(addr: str) -> str:
-    """Classify a bind address by its actual reachability tier."""
-    if addr in ('127.0.0.1', '::1', '0:0:0:0:0:0:0:1'):
-        return 'Loopback'
+    """Classify a bind address by its actual reachability tier.
+    Strips %interface suffixes before classification.
+    """
+    addr = addr.split('%')[0]  # strip e.g. %lo, %lxcbr0, %eth0
     if addr in ('0.0.0.0', '::', '0:0:0:0:0:0:0:0'):
         return 'All'
+    if addr.startswith('127.') or addr in ('::1', '0:0:0:0:0:0:0:1'):
+        return 'Loopback'
     if addr.startswith('fe80') or addr.startswith('169.254.'):
         return 'LinkLocal'
     return 'LAN'
@@ -80,46 +53,35 @@ def classify_risk(proto: str, port: int, scope: str) -> bool:
     return port in WEB_PORTS
 
 def _run(cmd, **kw):
-    """Run a subprocess, return (stdout, stderr, returncode)."""
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
     return r.stdout, r.stderr, r.returncode
 
 def parse_ss():
-    """
-    Run `ss -tulpn` and parse into a list of dicts.
-    Returns (rows, error_string_or_None).
-    Each row: {proto, local_addr, port, pid, process, scope, risk}
-    """
     out, err, rc = _run(['ss', '-tulpn'])
     if rc != 0:
         return [], f'ss failed: {err.strip()}'
 
     rows = []
-    # ss output:  Netid  State  Recv-Q  Send-Q  Local Address:Port  Peer ...  users:(("proc",pid=N,...))
-    for line in out.splitlines()[1:]:        # skip header
+    for line in out.splitlines()[1:]:
         line = line.strip()
         if not line:
             continue
         parts = line.split()
         if len(parts) < 5:
             continue
-        proto = parts[0].lower()            # tcp / udp / tcp6 / udp6
+        proto = parts[0].lower()
         if proto not in ('tcp', 'udp', 'tcp6', 'udp6'):
             continue
         base_proto = 'tcp' if 'tcp' in proto else 'udp'
 
-        local_field = parts[4]              # "addr:port" or "[::1]:port" or "*:port"
-        # split off the last colon
+        local_field = parts[4]
         if local_field.startswith('['):
-            # IPv6 bracket form  [fe80::1%eth0]:443
             m = re.match(r'\[([^\]]+)\]:(\d+)', local_field)
             if not m:
                 continue
             addr, port_s = m.group(1), m.group(2)
-            # strip interface suffix from link-local
             addr = addr.split('%')[0]
         elif local_field.count(':') > 1:
-            # bare IPv6  ::1:443 (shouldn't happen with ss but guard anyway)
             addr = local_field.rsplit(':', 1)[0]
             port_s = local_field.rsplit(':', 1)[1]
         else:
@@ -133,7 +95,9 @@ def parse_ss():
         if addr in ('*', ''):
             addr = '0.0.0.0'
 
-        # Extract pid/process from users:(("nginx",pid=12,fd=6))
+        # Strip %interface from non-bracketed addresses too (e.g. 0.0.0.0%lxcbr0)
+        addr = addr.split('%')[0]
+
         pid, proc = None, '?'
         users_m = re.search(r'users:\(\((.+?)\)\)', line)
         if users_m:
@@ -158,7 +122,6 @@ def parse_ss():
             'risk': risk,
         })
 
-    # Sort: Risk=True first, then by port
     rows.sort(key=lambda r: (not r['risk'], r['port']))
     return rows, None
 
@@ -168,7 +131,6 @@ def parse_ss():
 # ===========================================================================
 
 def _ver_ge(v: str, minimum: str) -> bool:
-    """Return True if version v >= minimum (e.g. '1.29.8' >= '1.29.8')."""
     def _t(s):
         return tuple(int(x) for x in re.findall(r'\d+', s)[:3])
     try:
@@ -177,16 +139,11 @@ def _ver_ge(v: str, minimum: str) -> bool:
         return False
 
 def detect_nginx():
-    """
-    Returns a dict describing nginx installation + HTTP/2 state.
-    Scans all included config files for http2 directives.
-    """
     info = {'installed': False, 'version': None, 'patched_version': False,
             'config_files': [], 'http2_enabled': False, 'http2_directives': [],
             'needs_harden': False, 'error': None}
     nginx_bin = shutil.which('nginx')
     if not nginx_bin:
-        # also try common paths
         for p in ('/usr/sbin/nginx', '/usr/local/sbin/nginx', '/usr/bin/nginx'):
             if os.path.exists(p):
                 nginx_bin = p
@@ -196,23 +153,18 @@ def detect_nginx():
 
     info['installed'] = True
 
-    # version
     out, _, rc = _run([nginx_bin, '-v'])
     ver_m = re.search(r'nginx/(\S+)', out + _)
     if ver_m:
         info['version'] = ver_m.group(1)
-        # nginx 1.29.8+ has the max_headers directive that bounds the attack
         info['patched_version'] = _ver_ge(info['version'], '1.29.8')
 
-    # config test to get main config path
     out, err, rc = _run([nginx_bin, '-T'])
     raw = out + err
-    # collect all unique config files referenced in the -T output
     files_seen = set()
     for m in re.finditer(r'# configuration file (.+?):', raw):
         files_seen.add(m.group(1).strip())
 
-    # also try -t for main config path
     out2, err2, _ = _run([nginx_bin, '-t'])
     for m in re.finditer(r'configuration file (.+?) test', out2 + err2):
         p = m.group(1).strip()
@@ -221,26 +173,19 @@ def detect_nginx():
 
     info['config_files'] = sorted(files_seen)
 
-    # scan -T dump for http2 or listen ... http2 directives
     h2_found = []
     for line in raw.splitlines():
         ls = line.strip()
-        # listen 443 ssl http2;  OR  http2 on;
         if re.search(r'\bhttp2\b', ls, re.IGNORECASE) and not ls.startswith('#'):
             h2_found.append(ls)
 
     info['http2_directives'] = h2_found
     info['http2_enabled'] = len(h2_found) > 0
-
-    # needs hardening if http2 is enabled AND version is not patched
     info['needs_harden'] = info['http2_enabled'] and not info['patched_version']
     return info
 
 
 def detect_apache():
-    """
-    Returns a dict describing Apache httpd installation + HTTP/2 state.
-    """
     info = {'installed': False, 'version': None, 'mod_http2_version': None,
             'patched': False, 'config_files': [], 'http2_enabled': False,
             'http2_directives': [], 'needs_harden': False, 'error': None}
@@ -261,31 +206,26 @@ def detect_apache():
 
     info['installed'] = True
 
-    # version
     out, err, _ = _run([apache_bin, '-v'])
     ver_m = re.search(r'Apache/(\S+)', out + err)
     if ver_m:
         info['version'] = ver_m.group(1)
 
-    # mod_http2 version via apachectl -M or apache2ctl -M
     ctl = shutil.which('apachectl') or shutil.which('apache2ctl')
     if ctl:
         out, err, _ = _run([ctl, '-M'])
         if 'http2_module' in (out + err):
             info['http2_enabled'] = True
-        # try to find mod_http2 version via dpkg or rpm
         try:
             pkg_out, _, rc = _run(['dpkg', '-l', 'libapache2-mod-http2'])
             if rc == 0:
                 m = re.search(r'\s(\d+\.\S+)\s', pkg_out)
                 if m:
                     info['mod_http2_version'] = m.group(1)
-                    # fix is in mod_http2 >= 2.0.41
                     info['patched'] = _ver_ge(info['mod_http2_version'], '2.0.41')
         except Exception:
             pass
 
-    # scan apache config for Protocols and H2 directives
     conf_dirs = []
     for d in ('/etc/apache2', '/etc/httpd', '/usr/local/apache2/conf'):
         if os.path.isdir(d):
@@ -320,7 +260,6 @@ def detect_apache():
 # ===========================================================================
 
 def _backup_file(path: str) -> str:
-    """Backup a config file to BAK_DIR. Returns backup path."""
     BAK_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     dest = BAK_DIR / (Path(path).name + f'.{ts}.bak')
@@ -338,13 +277,6 @@ def _unified_diff(original: str, modified: str, filename: str) -> str:
     ))
 
 def harden_nginx(dry_run=True):
-    """
-    Disable HTTP/2 in nginx configs.
-    Strategy:
-      - Remove ' http2' from listen directives (old syntax: listen 443 ssl http2)
-      - Insert 'http2 off;' in http/server blocks that had it enabled (nginx >= 1.25.1)
-    Returns list of action strings, and a dict of {filepath: diff_text} for review.
-    """
     actions = []
     diffs = {}
     nginx_bin = shutil.which('nginx') or '/usr/sbin/nginx'
@@ -354,7 +286,6 @@ def harden_nginx(dry_run=True):
     out, err, _ = _run([nginx_bin, '-T'])
     raw = out + err
 
-    # Collect actual config file paths from -T output
     file_set = set()
     for m in re.finditer(r'# configuration file (.+?):', raw):
         p = m.group(1).strip()
@@ -372,14 +303,7 @@ def harden_nginx(dry_run=True):
             actions.append(f'  SKIP {filepath}: {e}')
             continue
 
-        # Remove http2 from listen lines (old form)
-        # e.g.:  listen 443 ssl http2;  ->  listen 443 ssl;
         modified = re.sub(r'(\blisten\b[^;]*?)\s+http2\b', r'\1', original)
-
-        # If a server block had http2 enabled, insert "http2 off;" after the opening brace
-        # (handles nginx >= 1.25.1 new syntax where http2 is a standalone directive)
-        # We insert it at the top of server blocks that contained listen ... http2
-        # conservatively: only touch if the file changed or had http2 on; directive
         modified = re.sub(r'\bhttp2\s+on\s*;', 'http2 off;', modified)
 
         if modified == original:
@@ -402,7 +326,6 @@ def harden_nginx(dry_run=True):
                 actions.append(f'  {filepath}: WRITE FAILED — {e}  (backup at {bak})')
 
     if changed_any and not dry_run:
-        # Test config before reloading
         out, err, rc = _run([nginx_bin, '-t'])
         if rc == 0:
             _, _, rc2 = _run(['nginx', '-s', 'reload'])
@@ -418,11 +341,6 @@ def harden_nginx(dry_run=True):
 
 
 def harden_apache(dry_run=True):
-    """
-    Disable HTTP/2 in Apache config.
-    Strategy: comment out or replace 'Protocols h2 h2c http/1.1' with 'Protocols http/1.1'
-    and disable the http2_module.
-    """
     actions = []
     diffs = {}
 
@@ -445,13 +363,11 @@ def harden_apache(dry_run=True):
                     continue
 
                 modified = original
-                # Replace "Protocols h2 h2c http/1.1" -> "Protocols http/1.1"
                 modified = re.sub(
                     r'^(\s*Protocols\s+)(.*\bh2\b.*)',
                     lambda m: m.group(1) + re.sub(r'\s*\bh2c?\b', '', m.group(2)).strip(),
                     modified, flags=re.MULTILINE
                 )
-                # Disable H2 engine directives
                 modified = re.sub(r'^(\s*)(H2Engine\s+On)', r'\1H2Engine Off', modified, flags=re.MULTILINE | re.IGNORECASE)
 
                 if modified == original:
@@ -485,15 +401,10 @@ def harden_apache(dry_run=True):
 
 
 def install_cgroup_limit_nginx(memory_mb=1536, dry_run=True):
-    """
-    Set a per-worker cgroup memory limit for nginx via systemd drop-in.
-    memory_mb: OOM-kill threshold for each worker process.
-    """
     dropin_dir  = Path('/etc/systemd/system/nginx.service.d')
     dropin_file = dropin_dir / 'h2shield-memory.conf'
     content = f"""[Service]
 # H2Shield: kill, don't swap, a worker that exceeds this memory limit.
-# An OOM-killed worker respawns cleanly; a swapped box does not.
 MemoryMax={memory_mb}M
 MemorySwapMax=0
 """
@@ -510,7 +421,6 @@ MemorySwapMax=0
 
 
 def install_self_heal(dry_run=True):
-    """Install a systemd timer that re-runs this script in --headless mode daily."""
     service_content = f"""[Unit]
 Description=AEGIS H2Shield self-heal audit
 After=network.target
@@ -550,10 +460,6 @@ WantedBy=timers.target
 # ===========================================================================
 
 def verify_state():
-    """
-    Read-only check of current hardening state.
-    Returns a list of strings for display.
-    """
     lines = []
     ts = datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     lines.append(f'=== VERIFY {ts} ===')
@@ -576,7 +482,6 @@ def verify_state():
     else:
         lines.append('Apache httpd: not installed')
 
-    # live negotiation test if something is on 443
     rows, _ = parse_ss()
     live_443 = [r for r in rows if r['port'] == 443 and r['scope'] in ('All', 'LAN')]
     if live_443:
@@ -601,7 +506,7 @@ def verify_state():
 
 
 # ===========================================================================
-# HEADLESS PATH (cron / systemd)
+# HEADLESS PATH
 # ===========================================================================
 
 def run_headless(do_harden: bool):
@@ -663,6 +568,9 @@ FG_GREEN   = '#7ee787'
 BTN_DARK   = '#21262d'
 BTN_BLUE   = '#1f6feb'
 
+# FIX: use !important on button label colors so KDE/Breeze theme can't override them.
+# Also add explicit label { color } inside button rules since GTK3 themes often
+# target the GtkLabel child rather than the button widget itself.
 CSS = f"""
 window {{ background-color: {DARK_BG}; color: {FG_MAIN}; }}
 .header {{ font-size: 22px; font-weight: bold; color: {ACCENT}; }}
@@ -671,11 +579,15 @@ window {{ background-color: {DARK_BG}; color: {FG_MAIN}; }}
 .mono {{ font-family: monospace; font-size: 12px; }}
 .log  {{ font-family: monospace; font-size: 12px; color: {FG_GREEN}; }}
 .status {{ color: {FG_DIM}; font-size: 11px; }}
-.btn-dark {{ background-color: {BTN_DARK}; color: {FG_MAIN}; border: 1px solid #30363d; }}
-.btn-green {{ background-color: {GREEN}; color: white; border: none; }}
-.btn-blue  {{ background-color: {BTN_BLUE}; color: white; border: none; }}
-.btn-red   {{ background-color: {RED_WARN}; color: white; border: none; }}
-progressbar trough {{ background-color: {DARK_BG}; }}
+.btn-dark  {{ background-color: {BTN_DARK}; color: {FG_MAIN}; border: 1px solid #30363d; }}
+.btn-dark label  {{ color: {FG_MAIN}; }}
+.btn-green {{ background-color: {GREEN};    color: #ffffff; border: none; }}
+.btn-green label {{ color: #ffffff; }}
+.btn-blue  {{ background-color: {BTN_BLUE}; color: #ffffff; border: none; }}
+.btn-blue label  {{ color: #ffffff; }}
+.btn-red   {{ background-color: {RED_WARN}; color: #ffffff; border: none; }}
+.btn-red label   {{ color: #ffffff; }}
+progressbar trough   {{ background-color: {DARK_BG}; }}
 progressbar progress {{ background-color: {GREEN}; }}
 treeview {{ background-color: {DARK_BG}; color: {FG_MAIN}; font-family: monospace; font-size: 12px; }}
 treeview:selected {{ background-color: #1f6feb; }}
@@ -684,16 +596,14 @@ treeview:selected {{ background-color: #1f6feb; }}
 def _load_css():
     prov = Gtk.CssProvider()
     prov.load_from_data(CSS.encode())
-    # Gtk.Screen was removed in GTK4 and is unreliable in late GTK3 builds.
-    # Use the display-based path which works across GTK 3.x and 4.x.
     try:
-        display = Gtk.Widget.get_display(Gtk.Window())
-        screen = display.get_default_screen()
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        from gi.repository import Gdk
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
     except Exception:
-        # absolute fallback: attach to every future widget individually
         pass
 
 AUDIT_STAGES = [
@@ -735,20 +645,14 @@ class H2ShieldWindow(Gtk.Window):
 
         self._build_ui()
         self.show_all()
-
-        # kick off initial passive audit after the window renders
         GLib.idle_add(self._start_audit, False)
 
-    # -----------------------------------------------------------------------
-    # UI construction
-    # -----------------------------------------------------------------------
     def _build_ui(self):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         outer.set_margin_top(12); outer.set_margin_bottom(12)
         outer.set_margin_start(12); outer.set_margin_end(12)
         self.add(outer)
 
-        # header
         hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         title = Gtk.Label(label='AEGIS H2-SHIELD')
         title.get_style_context().add_class('header')
@@ -758,7 +662,6 @@ class H2ShieldWindow(Gtk.Window):
         hdr.pack_start(sub, False, False, 8)
         outer.pack_start(hdr, False, False, 0)
 
-        # buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_box.set_margin_top(12); btn_box.set_margin_bottom(8)
         self._btn_audit   = self._btn('Run Audit',         'btn-dark',  self._on_audit)
@@ -771,7 +674,6 @@ class H2ShieldWindow(Gtk.Window):
             btn_box.pack_start(b, False, False, 0)
         outer.pack_start(btn_box, False, False, 0)
 
-        # progress panel
         prog_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         prog_frame.get_style_context().add_class('panel')
         prog_frame.set_margin_bottom(8)
@@ -792,12 +694,10 @@ class H2ShieldWindow(Gtk.Window):
         prog_frame.pack_start(self._bar, False, False, 0)
         outer.pack_start(prog_frame, False, False, 0)
 
-        # tabs
         nb = Gtk.Notebook()
         nb.set_vexpand(True)
         outer.pack_start(nb, True, True, 0)
 
-        # tab: listening surface
         surf_scroll = Gtk.ScrolledWindow()
         surf_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._surface_store = Gtk.ListStore(str, str, str, str, str, str, str)
@@ -810,41 +710,46 @@ class H2ShieldWindow(Gtk.Window):
         surf_scroll.add(self._surface_tv)
         nb.append_page(surf_scroll, Gtk.Label(label='Listening Surface'))
 
-        # tab: server state
         srv_scroll = Gtk.ScrolledWindow()
         srv_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._srv_text = self._mono_textview()
         srv_scroll.add(self._srv_text)
         nb.append_page(srv_scroll, Gtk.Label(label='nginx / Apache'))
 
-        # tab: actions / log
         log_scroll = Gtk.ScrolledWindow()
         log_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._log_text = self._mono_textview(css_class='log')
         log_scroll.add(self._log_text)
         nb.append_page(log_scroll, Gtk.Label(label='Actions / Log'))
 
-        # tab: diffs
         diff_scroll = Gtk.ScrolledWindow()
         diff_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._diff_text = self._mono_textview()
         diff_scroll.add(self._diff_text)
         nb.append_page(diff_scroll, Gtk.Label(label='Config Diffs'))
 
-        # status bar
         self._status_lbl = Gtk.Label(label='Ready.')
         self._status_lbl.set_halign(Gtk.Align.START)
         self._status_lbl.get_style_context().add_class('status')
         self._status_lbl.set_margin_top(6)
         outer.pack_start(self._status_lbl, False, False, 0)
 
-        # timer: polls shared state and updates UI
         GLib.timeout_add(100, self._tick)
 
     def _btn(self, label, css_class, handler):
         b = Gtk.Button(label=label)
         b.get_style_context().add_class(css_class)
         b.connect('clicked', handler)
+        lbl = b.get_child()
+        if lbl:
+            from gi.repository import Gdk
+            hex_map = {'btn-green': 'ffffff', 'btn-blue': 'ffffff',
+                       'btn-red': 'ffffff', 'btn-dark': 'c9d1d9'}
+            h = hex_map.get(css_class, 'c9d1d9')
+            rgba = Gdk.RGBA(
+                red=int(h[0:2],16)/255, green=int(h[2:4],16)/255,
+                blue=int(h[4:6],16)/255, alpha=1.0)
+            lbl.override_color(Gtk.StateFlags.NORMAL, rgba)
         return b
 
     def _mono_textview(self, css_class='mono'):
@@ -855,9 +760,6 @@ class H2ShieldWindow(Gtk.Window):
         tv.get_style_context().add_class(css_class)
         return tv
 
-    # -----------------------------------------------------------------------
-    # Background thread
-    # -----------------------------------------------------------------------
     def _start_audit(self, do_harden: bool):
         if self._state['running']:
             return
@@ -919,7 +821,6 @@ class H2ShieldWindow(Gtk.Window):
                     result['diffs']   = all_diffs
                 else:
                     advance(3)
-                    # dry-run: show what harden WOULD do
                     dry_acts = []
                     dry_diffs = {}
                     if ng['installed']:
@@ -934,7 +835,6 @@ class H2ShieldWindow(Gtk.Window):
                     result['diffs']   = dry_diffs
 
                 advance(len(stages) - 1)
-                # write report
                 REP_DIR.mkdir(parents=True, exist_ok=True)
                 rep = {
                     'host': socket.gethostname(),
@@ -962,9 +862,6 @@ class H2ShieldWindow(Gtk.Window):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # -----------------------------------------------------------------------
-    # UI tick (runs on main thread via GLib.timeout_add)
-    # -----------------------------------------------------------------------
     def _tick(self):
         s = self._state
         self._stage_lbl.set_text(s['stage'])
@@ -989,21 +886,18 @@ class H2ShieldWindow(Gtk.Window):
                 self._apply_result(s['result'])
             for b in (self._btn_audit, self._btn_harden, self._btn_verify, self._btn_heal):
                 b.set_sensitive(True)
-            # reset so we don't fire again
             s['result'] = None
             s['error']  = None
 
-        return True  # keep the timer running
+        return True
 
     def _apply_result(self, result):
-        rows   = result.get('rows', [])
-        ng     = result.get('ng', {})
-        ap     = result.get('ap', {})
+        rows    = result.get('rows', [])
+        ng      = result.get('ng', {})
+        ap      = result.get('ap', {})
         actions = result.get('actions', [])
-        diffs  = result.get('diffs', {})
-        rep    = result.get('report', {})
+        diffs   = result.get('diffs', {})
 
-        # surface tab
         self._surface_store.clear()
         for r in rows:
             self._surface_store.append([
@@ -1012,7 +906,6 @@ class H2ShieldWindow(Gtk.Window):
                 r['scope'], '⚠ YES' if r['risk'] else 'no'
             ])
 
-        # server state tab
         srv_lines = []
         if ng.get('installed'):
             srv_lines += [
@@ -1038,26 +931,23 @@ class H2ShieldWindow(Gtk.Window):
 
         self._srv_text.get_buffer().set_text('\n'.join(srv_lines))
 
-        # actions tab
         ts = datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        at_risk = len([r for r in rows if r['risk']])
+        at_risk   = len([r for r in rows if r['risk']])
         reachable = len([r for r in rows if r['scope'] in ('All', 'LAN')])
-        self._append_log(
-            f'=== {socket.gethostname()}  {ts} ===\n'
-        )
+        self._append_log(f'=== {socket.gethostname()}  {ts} ===\n')
         for a in actions:
             self._append_log(f'  {a}\n')
 
-        # diffs tab
         if diffs:
             diff_txt = '\n\n'.join(f'--- {fp} ---\n{d}' for fp, d in diffs.items())
             self._diff_text.get_buffer().set_text(diff_txt)
         else:
             self._diff_text.get_buffer().set_text('(no config diffs — nothing changed or no servers found)')
 
-        # status bar
-        ng_state  = 'hardened' if ng.get('installed') and not ng.get('needs_harden') else ('⚠ needs harden' if ng.get('needs_harden') else 'absent')
-        ap_state  = 'hardened' if ap.get('installed') and not ap.get('needs_harden') else ('⚠ needs harden' if ap.get('needs_harden') else 'absent')
+        ng_state = ('hardened' if ng.get('installed') and not ng.get('needs_harden')
+                    else ('⚠ needs harden' if ng.get('needs_harden') else 'absent'))
+        ap_state = ('hardened' if ap.get('installed') and not ap.get('needs_harden')
+                    else ('⚠ needs harden' if ap.get('needs_harden') else 'absent'))
         self._status_lbl.set_text(
             f'Total: {len(rows)}  Reachable: {reachable}  At-risk: {at_risk}  '
             f'nginx: {ng_state}  Apache: {ap_state}'
@@ -1068,16 +958,13 @@ class H2ShieldWindow(Gtk.Window):
         it = buf.get_end_iter()
         buf.insert(it, text)
 
-    # -----------------------------------------------------------------------
-    # Button handlers
-    # -----------------------------------------------------------------------
     def _on_audit(self, _btn):
         self._start_audit(False)
 
     def _on_harden(self, _btn):
         dialog = Gtk.MessageDialog(
             transient_for=self,
-            flags=Gtk.DialogFlags.MODAL,
+            modal=True,
             message_type=Gtk.MessageType.WARNING,
             buttons=Gtk.ButtonsType.YES_NO,
             text='Apply hardening?'
@@ -1107,7 +994,7 @@ class H2ShieldWindow(Gtk.Window):
     def _on_install_heal(self, _btn):
         dialog = Gtk.MessageDialog(
             transient_for=self,
-            flags=Gtk.DialogFlags.MODAL,
+            modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text='Install systemd self-heal timer?'
