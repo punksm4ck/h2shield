@@ -684,10 +684,17 @@ treeview:selected {{ background-color: #1f6feb; }}
 def _load_css():
     prov = Gtk.CssProvider()
     prov.load_from_data(CSS.encode())
-    Gtk.StyleContext.add_provider_for_screen(
-        Gtk.Screen.get_default(), prov,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
+    # Gtk.Screen was removed in GTK4 and is unreliable in late GTK3 builds.
+    # Use the display-based path which works across GTK 3.x and 4.x.
+    try:
+        display = Gtk.Widget.get_display(Gtk.Window())
+        screen = display.get_default_screen()
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+    except Exception:
+        # absolute fallback: attach to every future widget individually
+        pass
 
 AUDIT_STAGES = [
     ('Enumerating listening ports', 20),
