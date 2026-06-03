@@ -20,7 +20,7 @@ try:
 except Exception:
     HAS_GTK = False
 
-VERSION = '1.0.8'
+VERSION = '1.1.0'
 APP_DIR  = Path('/opt/h2shield')
 LOG_DIR  = APP_DIR / 'logs'
 REP_DIR  = APP_DIR / 'reports'
@@ -579,7 +579,7 @@ window {{ background-color: {DARK_BG}; color: {FG_MAIN}; }}
 .mono {{ font-family: monospace; font-size: 12px; }}
 .log  {{ font-family: monospace; font-size: 12px; color: {FG_GREEN}; }}
 .status {{ color: {FG_DIM}; font-size: 11px; }}
-.btn-dark  {{ background-color: {BTN_DARK}; color: {FG_MAIN}; border: 1px solid #30363d; }}
+.btn-dark  {{ background-color: #2d333b; color: {FG_MAIN}; border: 1px solid #30363d; }}
 .btn-dark label  {{ color: {FG_MAIN}; }}
 .btn-green {{ background-color: {GREEN};    color: #ffffff; border: none; }}
 .btn-green label, .btn-green > label {{ color: #ffffff; }}
@@ -744,7 +744,7 @@ class H2ShieldWindow(Gtk.Window):
         GLib.timeout_add(100, self._tick)
 
     def _btn(self, label_text, css_class, handler):
-        fg_map = {'btn-green':'#ffffff','btn-blue':'#ffffff','btn-red':'#ffffff','btn-dark':'#c9d1d9'}
+        fg_map = {'btn-green':'#e0ffe8','btn-blue':'#d0eaff','btn-red':'#ffe0e0','btn-dark':'#c9d1d9'}
         fg = fg_map.get(css_class, '#c9d1d9')
         b = Gtk.Button(label=label_text)
         b.get_style_context().add_class(css_class)
